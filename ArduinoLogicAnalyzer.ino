@@ -41,9 +41,7 @@ void loop() {
     readInputsState();
   }
 
-  if (tryToReadConfiguration()) {
-    
-  }
+  readDataFromSerial();
 
   int count = buffer.size();
   if (count > 0 && (!config.enabled || count >= config.samplesNumber)) {
@@ -52,28 +50,34 @@ void loop() {
   }
 }
 
-bool tryToReadConfiguration() {
+void readDataFromSerial() {
+  const byte GetInfoCmd = 1;
+  const byte SetConfig = 2;
+  
   if (Serial.available()) {
     DynamicJsonDocument doc(jsonDocSize);
     DeserializationError err = deserializeJson(doc, Serial);
     if (err == DeserializationError::Ok) {
-      config.enabled = doc["enabled"].as<byte>();
-      config.samplesNumber = doc["samplesNumber"].as<byte>();
-      JsonArray arr = doc["chConfig"];
-      if (!arr.isNull()) {
-        for (int i = 0; i < arr.size() && i < chNumber; ++i) {
-          ChannelConfig& chConfig = config.chConfig[i];
-          chConfig.enabled = arr[i]["enabled"].as<byte>();
+      byte cmd = doc["cmd"].as<byte>();
+      if (cmd == GetInfoCmd) {
+        sendInfo();
+      } else if (cmd == SetConfig) {
+        config.enabled = doc["enabled"].as<byte>();
+        config.samplesNumber = doc["samplesNumber"].as<byte>();
+        JsonArray arr = doc["chConfig"];
+        if (!arr.isNull()) {
+          for (int i = 0; i < arr.size() && i < chNumber; ++i) {
+            ChannelConfig& chConfig = config.chConfig[i];
+            chConfig.enabled = arr[i]["enabled"].as<byte>();
+          }
         }
       }
-      return true;
     } else if (err == DeserializationError::NoMemory) {
       Serial.println("{\"err\":\"Not enough memory\"}");
     } else {
       Serial.println("{\"err\":\"Not parsed\"}");
     }
   }
-  return false;
 }
 
 void readInputsState() {
@@ -88,8 +92,14 @@ void readInputsState() {
   }
 }
 
+void sendInfo() {
+  Serial.print("{\"type\":\"info\",\"channels\":");
+  Serial.print(chNumber);
+  Serial.println("}");
+}
+
 void sendChState(const ChannelState& chState) {
-  Serial.print("{\"ch\":\"");
+  Serial.print("{\"type\":\"data\",\"ch\":\"");
   Serial.print(chState.channel);
   Serial.print("\", \"state\":\"");
   Serial.print(chState.state);
