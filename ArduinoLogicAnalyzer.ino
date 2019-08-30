@@ -2,9 +2,11 @@
 #include <CircularBuffer.h>
 
 const byte chPins[] = { 2, 3 };
+const byte meanderPin = 10;
 const byte chNumber = 2;
 const short bufferSize = 100;
 const int jsonDocSize = 2 * (JSON_OBJECT_SIZE(3) + JSON_ARRAY_SIZE(chNumber) + chNumber * JSON_OBJECT_SIZE(1));
+const short meanderHalfPeriod = 250;
 
 struct ChannelConfig {
   bool enabled;
@@ -26,11 +28,18 @@ Config config;
 CircularBuffer<ChannelState, bufferSize> buffer;
 //StaticJsonDocument<jsonDocSize> doc;
 
+byte prevPinValues[chNumber];
+byte meanderPinState = HIGH;
+long prevMeanderTime = 0;
+
 void setup() {
   // put your setup code here, to run once:
   for (int i = 0; i < chNumber; ++i) {
-    pinMode(chPins[i], INPUT_PULLUP);
+    pinMode(chPins[i], INPUT);
   }
+
+  pinMode(meanderPin, OUTPUT);
+  digitalWrite(meanderPin, meanderPinState);
 
   Serial.begin(115200);
 }
@@ -48,6 +57,12 @@ void loop() {
     const ChannelState chState = buffer.shift();
     sendChState(chState);
   }
+
+  if (millis() - prevMeanderTime > meanderHalfPeriod) {
+    meanderPinState = !meanderPinState;
+    digitalWrite(meanderPin, meanderPinState);
+    prevMeanderTime = millis();
+  }
 }
 
 void readDataFromSerial() {
@@ -62,15 +77,20 @@ void readDataFromSerial() {
       if (cmd == GetInfoCmd) {
         sendInfo();
       } else if (cmd == SetConfig) {
-        config.enabled = doc["enabled"].as<byte>();
-        config.samplesNumber = doc["samplesNumber"].as<byte>();
-        JsonArray arr = doc["chConfig"];
+        config.enabled = doc["en"].as<byte>();
+        config.samplesNumber = doc["samples"].as<byte>();
+        JsonArray arr = doc["chConf"];
         if (!arr.isNull()) {
           for (int i = 0; i < arr.size() && i < chNumber; ++i) {
             ChannelConfig& chConfig = config.chConfig[i];
-            chConfig.enabled = arr[i]["enabled"].as<byte>();
+            chConfig.enabled = arr[i]["en"].as<byte>();
+            if (chConfig.enabled) {
+              prevPinValues[i] = 2;
+            }
           }
         }
+
+        Serial.println("{\"type\":\"config\"}");
       }
     } else if (err == DeserializationError::NoMemory) {
       Serial.println("{\"err\":\"Not enough memory\"}");
@@ -83,11 +103,15 @@ void readDataFromSerial() {
 void readInputsState() {
   for (int i = 0; i < chNumber && !buffer.isFull(); ++i) {
     if (config.chConfig[i].enabled) {
-      ChannelState chState;
-      chState.channel = i;
-      chState.state = digitalRead(chPins[i]);
-      chState.timestamp = micros();
-      buffer.push(chState);
+      byte val = digitalRead(chPins[i]);
+      if (prevPinValues[i] == 2 || prevPinValues[i] != val) {
+        ChannelState chState;
+        chState.channel = i;
+        chState.state = val;
+        chState.timestamp = micros();
+        buffer.push(chState);
+        prevPinValues[i] = val;
+      }
     }
   }
 }
